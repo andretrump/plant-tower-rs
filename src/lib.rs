@@ -7,6 +7,12 @@ pub mod hardware {
 }
 
 pub mod mqtt {
+    mod device;
+    pub use device::Component;
+    pub use device::Device;
+
     mod switch;
     pub use switch::Switch;
 }
+
+pub mod wifi;
