@@ -1,9 +1,10 @@
-use std::collections::HashMap;
-
-use esp_idf_svc::mqtt::client::EspMqttClient;
-use json::object;
-
 use crate::mqtt::{device::MqttConfig, Component};
+use anyhow::Result;
+use esp_idf_hal::sys::EspError;
+use esp_idf_svc::mqtt::client::EspMqttClient;
+use esp_idf_svc::mqtt::client::QoS;
+use json::object;
+use std::collections::HashMap;
 
 pub struct Switch {
     mqtt_config: MqttConfig,
@@ -33,7 +34,46 @@ impl Switch {
         self.is_on
     }
 
-    pub fn switch_on(&mut self, _mqtt_client: &mut EspMqttClient) {}
+    pub fn switch_on(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
+        if !self.is_on {
+            self.is_on = true;
+            self.send_state(mqtt_client, SwitchState::On)?;
+        }
+        Ok(())
+    }
+
+    pub fn switch_off(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
+        if self.is_on {
+            self.is_on = false;
+            self.send_state(mqtt_client, SwitchState::Off)?;
+        }
+        Ok(())
+    }
+
+    pub fn toggle(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
+        if self.is_on {
+            self.is_on = false;
+            self.send_state(mqtt_client, SwitchState::Off)?;
+        } else {
+            self.is_on = true;
+            self.send_state(mqtt_client, SwitchState::On)?;
+        }
+        Ok(())
+    }
+
+    fn send_state(
+        &self,
+        mqtt_client: &mut EspMqttClient,
+        state: SwitchState,
+    ) -> Result<(), EspError> {
+        mqtt_client.publish(
+            self.mqtt_config.state_topic().as_str(),
+            QoS::AtLeastOnce,
+            true,
+            state.to_string().as_bytes(),
+        )?;
+        Ok(())
+    }
 }
 
 impl Component for Switch {
@@ -45,7 +85,20 @@ impl Component for Switch {
         self.mqtt_config.state_topic()
     }
 
-    fn process_message(&mut self, _message: String) {}
+    fn command_topic(&self) -> Option<&String> {
+        Some(&self.command_topic)
+    }
+
+    fn process_message(&mut self, mqtt_client: &mut EspMqttClient, payload: &str) -> Result<()> {
+        if payload.eq(&SwitchState::On.to_string()) {
+            self.switch_on(mqtt_client)?;
+        } else if payload.eq(&SwitchState::Off.to_string()) {
+            self.switch_off(mqtt_client)?;
+        } else {
+            log::warn!("Ignoring unknown payload {}", payload);
+        }
+        Ok(())
+    }
 
     fn to_discovery_payload(&self) -> json::JsonValue {
         let mut message = object! {
@@ -60,4 +113,12 @@ impl Component for Switch {
         }
         message
     }
+}
+
+#[derive(strum_macros::Display)]
+enum SwitchState {
+    #[strum(serialize = "ON")]
+    On,
+    #[strum(serialize = "OFF")]
+    Off,
 }

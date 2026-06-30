@@ -1,16 +1,14 @@
-use std::collections::HashMap;
-
-use embedded_svc::mqtt::client::{Details::Complete, EventPayload::Error, EventPayload::Received};
 use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::peripherals::Peripherals;
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    mqtt::client::MqttClientConfiguration,
-    mqtt::client::{Details, EspMqttClient},
-};
-use plant_tower_rs::mqtt;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use plant_tower_rs::mqtt::{self, Component};
 use plant_tower_rs::wifi;
-use plant_tower_rs::{hardware::DigitalOutput, mqtt::Component};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fmt;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 #[toml_cfg::toml_config]
 pub struct Config {
@@ -26,68 +24,73 @@ pub struct Config {
     wifi_password: &'static str,
 }
 
+enum Components {
+    PumpSwitch,
+}
+
+impl fmt::Display for Components {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Components::PumpSwitch => write!(f, "plant_tower_rs_pump_switch"),
+        }
+    }
+}
+
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
-
     let peripherals = Peripherals::take().expect("Failed to initialize peripherals");
     let sys_loop = EspSystemEventLoop::take().expect("Failed to initialize system loop");
-
+    let nvs = EspDefaultNvsPartition::take().expect("Failed to initialize NVS");
     let app_config = CONFIG;
+
     let _wifi = wifi::setup(
         peripherals.modem,
         sys_loop.clone(),
+        nvs.clone(),
         app_config.wifi_ssid,
         app_config.wifi_password,
     )
     .expect("Failed to setup Wifi");
 
-    let broker_url = format!(
-        "mqtt://{}:{}@{}",
-        app_config.mqtt_user, app_config.mqtt_password, app_config.mqtt_host
-    );
-    let mut mqtt_client = EspMqttClient::new_cb(
-        &broker_url,
-        &MqttClientConfiguration::default(),
-        move |event| match event.payload() {
-            Received { data, details, .. } => process_event(data, details),
-            Error(e) => log::warn!("Received error from MQTT: {:?}", e),
-            _ => log::info!("Received from MQTT: {:?}", event.payload()),
-        },
+    let (mut mqtt_client, receiver) = mqtt::setup(
+        app_config.mqtt_user,
+        app_config.mqtt_password,
+        app_config.mqtt_host,
     )
-    .expect("Failed to connect MQTT");
+    .expect("Failed to setup MQTT");
 
     let mut plant_tower = mqtt::Device::new(
         String::from("plant_tower_rs"),
         String::from("Plant Tower Rust"),
         String::from("Myself"),
     );
-
-    let switch: Box<dyn Component> = Box::new(mqtt::Switch::new(
-        String::from("plant_tower_rs_pump_switch"),
+    let pump_switch = Rc::new(RefCell::new(mqtt::Switch::new(
+        Components::PumpSwitch.to_string(),
         String::from("Pump"),
         HashMap::from([(String::from("icon"), String::from("mdi:pump"))]),
-    ));
-    plant_tower.register_component(switch);
-
+    )));
+    plant_tower.register_component(Rc::clone(&pump_switch) as Rc<RefCell<dyn Component>>);
     plant_tower.send_discovery_message(&mut mqtt_client);
+    plant_tower.subscribe_command_topics(&mut mqtt_client);
 
-    let mut led = DigitalOutput::new(peripherals.pins.gpio26);
+    pump_switch
+        .borrow_mut()
+        .switch_on(&mut mqtt_client)
+        .unwrap_or_else(|err| log::warn!("Failed to switch on pump: {}", err));
+    let mut last_switched = Instant::now();
 
     loop {
-        led.switch_on();
-        FreeRtos::delay_ms(1000);
-        led.switch_off();
-        FreeRtos::delay_ms(1000);
-    }
-}
-
-fn process_event(data: &[u8], details: Details) {
-    match details {
-        Complete => {
-            let payload_string = str::from_utf8(data).expect("Failed to convert payload to string");
-            log::info!("{:?}", payload_string);
+        if let Ok((topic, payload)) = receiver.try_recv() {
+            plant_tower.dispatch_event(&mut mqtt_client, topic.as_str(), payload.as_str());
         }
-        _ => {}
+        if last_switched.elapsed() >= Duration::from_secs(10) {
+            pump_switch
+                .borrow_mut()
+                .toggle(&mut mqtt_client)
+                .unwrap_or_else(|err| log::warn!("Failed to toggle pump switch: {}", err));
+            last_switched = Instant::now();
+        }
+        FreeRtos::delay_ms(10);
     }
 }

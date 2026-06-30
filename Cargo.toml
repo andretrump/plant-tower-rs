@@ -27,6 +27,7 @@ toml-cfg = "0.2.0"
 embedded-svc = "0.29.0"
 anyhow = "1.0.103"
 json = "0.12.4"
+strum_macros = "0.28.0"
 
 [build-dependencies]
 embuild = "0.33"

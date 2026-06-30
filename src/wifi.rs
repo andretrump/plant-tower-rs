@@ -2,12 +2,14 @@ use anyhow::{bail, Result};
 use esp_idf_hal::modem::WifiModemPeripheral;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
+    nvs::EspDefaultNvsPartition,
     wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 
 pub fn setup(
     modem: impl WifiModemPeripheral + 'static,
     sysloop: EspSystemEventLoop,
+    nvs: EspDefaultNvsPartition,
     ssid: &str,
     password: &str,
 ) -> Result<Box<EspWifi<'static>>> {
@@ -20,7 +22,7 @@ pub fn setup(
         log::info!("Wifi password is empty");
     }
 
-    let mut esp_wifi = EspWifi::new(modem, sysloop.clone(), None)?;
+    let mut esp_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
     let mut wifi = BlockingWifi::wrap(&mut esp_wifi, sysloop)?;
     wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
 
