@@ -1,16 +1,20 @@
+use crate::interface::Switchable;
 use crate::mqtt::{device::MqttConfig, Component};
 use anyhow::Result;
 use esp_idf_hal::sys::EspError;
 use esp_idf_svc::mqtt::client::EspMqttClient;
 use esp_idf_svc::mqtt::client::QoS;
 use json::object;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct Switch {
     mqtt_config: MqttConfig,
     command_topic: String,
     additional_discovery_config: HashMap<String, String>,
     is_on: bool,
+    listeners: Vec<Rc<RefCell<dyn Switchable>>>,
 }
 
 impl Switch {
@@ -27,7 +31,12 @@ impl Switch {
             command_topic,
             additional_discovery_config,
             is_on: false,
+            listeners: Vec::new(),
         }
+    }
+
+    pub fn register(&mut self, listener: Rc<RefCell<dyn Switchable>>) {
+        self.listeners.push(listener);
     }
 
     pub fn is_on(&self) -> bool {
@@ -35,29 +44,28 @@ impl Switch {
     }
 
     pub fn switch_on(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
-        if !self.is_on {
-            self.is_on = true;
-            self.send_state(mqtt_client, SwitchState::On)?;
-        }
+        self.send_state(mqtt_client, SwitchState::On)?;
+        self.is_on = true;
+        self.update_listeners();
         Ok(())
     }
 
     pub fn switch_off(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
-        if self.is_on {
-            self.is_on = false;
-            self.send_state(mqtt_client, SwitchState::Off)?;
-        }
+        self.send_state(mqtt_client, SwitchState::Off)?;
+        self.is_on = false;
+        self.update_listeners();
         Ok(())
     }
 
     pub fn toggle(&mut self, mqtt_client: &mut EspMqttClient) -> Result<(), EspError> {
-        if self.is_on {
-            self.is_on = false;
-            self.send_state(mqtt_client, SwitchState::Off)?;
+        let new_state = if self.is_on {
+            SwitchState::Off
         } else {
-            self.is_on = true;
-            self.send_state(mqtt_client, SwitchState::On)?;
-        }
+            SwitchState::On
+        };
+        self.send_state(mqtt_client, new_state)?;
+        self.is_on = !self.is_on;
+        self.update_listeners();
         Ok(())
     }
 
@@ -73,6 +81,18 @@ impl Switch {
             state.to_string().as_bytes(),
         )?;
         Ok(())
+    }
+
+    fn update_listeners(&self) {
+        if self.is_on {
+            self.listeners
+                .iter()
+                .for_each(|listeners| listeners.borrow_mut().switch_on());
+        } else {
+            self.listeners
+                .iter()
+                .for_each(|listeners| listeners.borrow_mut().switch_off());
+        }
     }
 }
 

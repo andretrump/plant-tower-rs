@@ -6,6 +6,11 @@ pub mod hardware {
     pub use pump::Pump;
 }
 
+pub mod interface {
+    mod switchable;
+    pub use switchable::Switchable;
+}
+
 pub mod mqtt {
     mod setup;
     pub use setup::setup;

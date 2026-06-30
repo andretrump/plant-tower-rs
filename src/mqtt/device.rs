@@ -26,7 +26,7 @@ impl Device {
         }
     }
 
-    pub fn register_component(&mut self, component: Rc<RefCell<dyn Component>>) {
+    pub fn register(&mut self, component: Rc<RefCell<dyn Component>>) {
         let unique_id = component.borrow().unique_id().clone();
         self.components.insert(unique_id, component);
     }

@@ -2,8 +2,9 @@ use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use plant_tower_rs::interface::Switchable;
 use plant_tower_rs::mqtt::{self, Component};
-use plant_tower_rs::wifi;
+use plant_tower_rs::{hardware, wifi};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -70,7 +71,12 @@ fn main() {
         String::from("Pump"),
         HashMap::from([(String::from("icon"), String::from("mdi:pump"))]),
     )));
-    plant_tower.register_component(Rc::clone(&pump_switch) as Rc<RefCell<dyn Component>>);
+    plant_tower.register(Rc::clone(&pump_switch) as Rc<RefCell<dyn Component>>);
+
+    let pump = Rc::new(RefCell::new(hardware::Pump::new(peripherals.pins.gpio26)));
+    pump_switch
+        .borrow_mut()
+        .register(pump as Rc<RefCell<dyn Switchable>>);
     plant_tower.send_discovery_message(&mut mqtt_client);
     plant_tower.subscribe_command_topics(&mut mqtt_client);
 
